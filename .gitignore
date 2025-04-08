@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Arquivos de configuração do ambiente
+.env

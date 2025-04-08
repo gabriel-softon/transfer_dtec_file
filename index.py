@@ -7,8 +7,8 @@ import sys
 import mysql.connector
 from dotenv import load_dotenv
 
-DATE_DIRECTORY = '20250317'
-# DATE_DIRECTORY = datetime.now().strftime("%Y%m%d")
+# DATE_DIRECTORY = '20250317'
+DATE_DIRECTORY = datetime.now().strftime("%Y%m%d")
 
 load_dotenv()
 
@@ -40,8 +40,8 @@ def get_logger():
 
 logger = get_logger()
 
-PATH_BASE = '/home/softon/test3'
-# PATH_BASE = '/media/noticias_www'
+# PATH_BASE = '/home/softon/test3'
+PATH_BASE = '/media/noticias_www'
 
 CAT_ABREV = {
     'Lavagem de Dinheiro': 'LD',
@@ -104,9 +104,9 @@ def construir_caminhos(registro):
     local_pattern = f"{PATH_BASE}/{registro['CAT_ABREV']}/{registro['CAT_PREFIX']}{DATE_DIRECTORY}/{registro['REG_NOTICIA']}*"
     
     if registro['REG_NOTICIA'] == f"{registro['CAT_PREFIX']}{DATE_DIRECTORY}":
-        remote_dir = f"/home/ubuntu/test3/{registro['CAT_ABREV']}/{registro['CAT_PREFIX']}{DATE_DIRECTORY}"
+        remote_dir = f"{PATH_BASE}/{registro['CAT_ABREV']}/{registro['CAT_PREFIX']}{DATE_DIRECTORY}"
     else:
-        remote_dir = f"/home/ubuntu/test3/{registro['CAT_ABREV']}/{registro['CAT_PREFIX']}{DATE_DIRECTORY}/{registro['REG_NOTICIA']}"
+        remote_dir = f"{PATH_BASE}/{registro['CAT_ABREV']}/{registro['CAT_PREFIX']}{DATE_DIRECTORY}/{registro['REG_NOTICIA']}"
     
     return local_pattern, remote_dir
 
