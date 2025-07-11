@@ -1,14 +1,18 @@
+import datetime
 import os
 import subprocess
 import logging
 import glob
+from datetime import datetime
 from collections import defaultdict
 import sys
 import mysql.connector
 from dotenv import load_dotenv
 
-# DATE_DIRECTORY = '20250317'
+# DATE_DIRECTORY = '20250624'
 DATE_DIRECTORY = datetime.now().strftime("%Y%m%d")
+PATH_BASE_REMOTE = '/mnt/dtecflex-site-root'
+# PATH_BASE_REMOTE = '/mnt/dtecflex-site-root/test5'
 
 load_dotenv()
 
@@ -45,10 +49,10 @@ PATH_BASE = '/media/noticias_www'
 
 CAT_ABREV = {
     'Lavagem de Dinheiro': 'LD',
-    'Crime': 'CR',
-    'Fraude': 'FF',
-    'Empresarial': 'SE',
-    'Ambiental': 'SA'
+    'Crime':               'CR',
+    'Fraude':              'FF',
+    'Empresarial':         'SE',
+    'Ambiental':           'SA'
 }
 
 CAT_PREFIX = {
@@ -59,12 +63,21 @@ CAT_PREFIX = {
     'SA': 'A'
 }
 
+CATEGORY_MAPPING = {
+    'Lavagem de Dinheiro': ('Lavagem de Dinheiro', 'DTECFLEX'),
+    'Crime':               ('Crimes',             'DTECCRIM'),
+    'Fraude':              ('Fraude Financeira',  'DTECFLEX'),
+    'Empresarial':         ('Saúde Empresarial',  'DTECEMP'),
+    'Ambiental':           ('SocioAmbiental',     'DTECAMB'),
+}
+
 DB_CONFIG = {
-    'user': os.getenv('DB_USER'),
-    'password': os.getenv('DB_PASS'),
-    'host': os.getenv('DB_HOST'),
-    'port': int(os.getenv('DB_PORT', 3306)),
-    'database': os.getenv('DB_NAME')
+    'user':     'dtecflex',
+    'password': 'softon1245',
+    'host':     'dtec-flex.com.br',
+    # 'host':     '10.10.10.24',
+    'port':     '3306',
+    'database': 'dtecflex'
 }
 
 def fetch_registros():
@@ -75,14 +88,13 @@ def fetch_registros():
             SELECT *
             FROM TB_NOTICIA_RASPADA
             WHERE STATUS = '201-APPROVED'
-                AND DT_APROVACAO >= current_date
         """
         cursor.execute(query)
         registros = cursor.fetchall()
 
         for reg in registros:
-            reg['CAT_ABREV'] = CAT_ABREV.get(reg['CATEGORIA'])
-            reg['CAT_PREFIX'] = CAT_PREFIX.get(reg['CAT_ABREV'])
+            reg['CAT_ABREV']  = CAT_ABREV.get(reg['CATEGORIA'])
+            reg['CAT_PREFIX']= CAT_PREFIX.get(reg['CAT_ABREV'])
 
         return registros
     except mysql.connector.Error as err:
@@ -102,12 +114,7 @@ def agrupar_registros(registros):
 
 def construir_caminhos(registro):
     local_pattern = f"{PATH_BASE}/{registro['CAT_ABREV']}/{registro['CAT_PREFIX']}{DATE_DIRECTORY}/{registro['REG_NOTICIA']}*"
-    
-    if registro['REG_NOTICIA'] == f"{registro['CAT_PREFIX']}{DATE_DIRECTORY}":
-        remote_dir = f"{PATH_BASE}/{registro['CAT_ABREV']}/{registro['CAT_PREFIX']}{DATE_DIRECTORY}"
-    else:
-        remote_dir = f"{PATH_BASE}/{registro['CAT_ABREV']}/{registro['CAT_PREFIX']}{DATE_DIRECTORY}/{registro['REG_NOTICIA']}"
-    
+    remote_dir    = f"{PATH_BASE_REMOTE}/{registro['CAT_ABREV']}/{registro['CAT_PREFIX']}{DATE_DIRECTORY}"
     return local_pattern, remote_dir
 
 def transferir_arquivo(local_pattern, remote_dir, noticia_id):
@@ -127,8 +134,9 @@ def transferir_arquivo(local_pattern, remote_dir, noticia_id):
 
     itens_str = " ".join(f'"{item}"' for item in itens)
     rsync_command = (
-        f'rsync -az -e "ssh -i /home/softon/keypairs/rsa_key_file_3072 -p 8022" '
-        f'{itens_str} "ubuntu@dtec-flex.com.br:{remote_dir}"'
+        f'rsync -az --no-perms --no-owner --no-group --no-times --omit-dir-times --size-only '
+        f'-e "ssh -i /home/softon/keypairs/rsa_key_file_3072 -p 8022" '
+        f'{itens_str} ubuntu@dtec-flex.com.br:{remote_dir}'
     )
     logger.info(f"Executando rsync: {rsync_command}")
     result = subprocess.run(rsync_command, shell=True, capture_output=True, text=True)
@@ -137,9 +145,9 @@ def transferir_arquivo(local_pattern, remote_dir, noticia_id):
         logger.info(f"Transferência concluída com sucesso para o padrão: {local_pattern}")
         try:
             conn = mysql.connector.connect(**DB_CONFIG)
-            cursor = conn.cursor(dictionary=True)
-            query = "UPDATE TB_NOTICIA_RASPADA SET STATUS = %s, DT_TRANSFERENCIA = NOW() WHERE ID = %s"
-            cursor.execute(query, ("205-TRANSFERED", noticia_id))
+            cursor = conn.cursor()
+            update_sql = "UPDATE TB_NOTICIA_RASPADA SET STATUS=%s, DT_TRANSFERENCIA=NOW() WHERE ID=%s"
+            cursor.execute(update_sql, ("205-TRANSFERED", noticia_id))
             conn.commit()
             logger.info(f"{cursor.rowcount} registro(s) atualizado(s) para status 205-TRANSFERED")
         except mysql.connector.Error as err:
@@ -160,101 +168,64 @@ def fetch_noticias_publicadas():
         cursor = conn.cursor(dictionary=True)
         query = """
             SELECT 
-                r.ID AS news_id,
-                r.LINK_ID,
-                r.URL,
-                r.FONTE,
-                r.DATA_PUBLICACAO,
-                r.CATEGORIA,
-                r.REG_NOTICIA,
-                r.QUERY,
-                r.ID_ORIGINAL,
-                r.LINK_ORIGINAL,
-                r.DT_RASPAGEM,
-                r.DT_DECODE,
-                r.TITULO,
-                r.ID_USUARIO,
-                r.STATUS,
-                r.OPERACAO,
-                r.TENTATIVA_EXTRAIR,
-                r.TEXTO_NOTICIA,
-                r.REGIAO,
-                r.UF,
-                r.DT_APROVACAO,
-                n.ID AS name_id,
-                n.NOME,
-                n.CPF,
-                n.NOME_CPF,
-                n.APELIDO,
-                n.SEXO,
-                n.PESSOA,
-                n.IDADE,
-                n.ATIVIDADE,
-                n.ENVOLVIMENTO,
-                n.TIPO_SUSPEITA,
-                n.FLG_PESSOA_PUBLICA,
-                n.ANIVERSARIO,
-                n.INDICADOR_PPE
+                r.ID              AS news_id,
+                r.LINK_ID, r.URL, r.FONTE, r.DATA_PUBLICACAO,
+                r.CATEGORIA, r.REG_NOTICIA, r.QUERY,
+                r.ID_ORIGINAL, r.LINK_ORIGINAL,
+                r.DT_RASPAGEM, r.DT_DECODE, r.TITULO,
+                r.ID_USUARIO, r.STATUS,
+                r.TENTATIVA_EXTRAIR, r.TEXTO_NOTICIA,
+                r.REGIAO, r.UF, r.DT_APROVACAO,
+                n.ID              AS name_id,
+                n.NOME, n.CPF, n.NOME_CPF, n.APELIDO,
+                n.SEXO, n.PESSOA, n.IDADE, n.ATIVIDADE,
+                n.ENVOLVIMENTO, n.TIPO_SUSPEITA,
+                n.FLG_PESSOA_PUBLICA, n.ANIVERSARIO,
+                n.INDICADOR_PPE,
+                n.OPERACAO        AS OPERACAO
             FROM TB_NOTICIA_RASPADA r
-            LEFT JOIN TB_NOTICIA_RASPADA_NOME n ON r.ID = n.NOTICIA_ID
+            LEFT JOIN TB_NOTICIA_RASPADA_NOME n 
+            ON r.ID = n.NOTICIA_ID
             WHERE r.STATUS = '205-TRANSFERED'
-            AND DT_TRANSFERENCIA >= current_date
+            AND r.DT_TRANSFERENCIA >= CURRENT_DATE
         """
         cursor.execute(query)
         rows = cursor.fetchall()
-        logger.info(f"DEBUG: Total de linhas retornadas: {len(rows)}")
-        
         noticias = {}
         for row in rows:
-            news_id = row['news_id']
-            if news_id not in noticias:
-                noticias[news_id] = {
-                    'ID': row['news_id'],
-                    'LINK_ID': row.get('LINK_ID'),
-                    'URL': row.get('URL'),
-                    'FONTE': row.get('FONTE'),
+            nid = row['news_id']
+            if nid not in noticias:
+                noticias[nid] = {
+                    'ID':              nid,
+                    'LINK_ID':         row.get('LINK_ID'),
+                    'URL':             row.get('URL'),
+                    'FONTE':           row.get('FONTE'),
                     'DATA_PUBLICACAO': row.get('DATA_PUBLICACAO'),
-                    'CATEGORIA': row.get('CATEGORIA'),
-                    'REG_NOTICIA': row.get('REG_NOTICIA'),
-                    'QUERY': row.get('QUERY'),
-                    'ID_ORIGINAL': row.get('ID_ORIGINAL'),
-                    'LINK_ORIGINAL': row.get('LINK_ORIGINAL'),
-                    'DT_RASPAGEM': row.get('DT_RASPAGEM'),
-                    'DT_DECODE': row.get('DT_DECODE'),
-                    'TITULO': row.get('TITULO'),
-                    'ID_USUARIO': row.get('ID_USUARIO'),
-                    'STATUS': row.get('STATUS'),
-                    'OPERACAO': row.get('OPERACAO'),
-                    'TENTATIVA_EXTRAIR': row.get('TENTATIVA_EXTRAIR'),
-                    'TEXTO_NOTICIA': row.get('TEXTO_NOTICIA'),
-                    'REGIAO': row.get('REGIAO'),
-                    'UF': row.get('UF'),
-                    'DT_APROVACAO': row.get('DT_APROVACAO'),
-                    'NAMES': []
+                    'CATEGORIA':       row.get('CATEGORIA'),
+                    'REG_NOTICIA':     row.get('REG_NOTICIA'),
+                    'TEXTO_NOTICIA':   row.get('TEXTO_NOTICIA'),
+                    'UF':              row.get('UF'),
+                    'REGIAO':          row.get('REGIAO'),
+                    'OPERACAO':        row.get('OPERACAO'),
+                    'TITULO':          row.get('TITULO'),
+                    'NAMES':           []
                 }
             if row.get('name_id') is not None:
-                name_data = {
-                    'ID': row.get('name_id'),
-                    'NOME': row.get('NOME'),
-                    'CPF': row.get('CPF'),
-                    'NOME_CPF': row.get('NOME_CPF'),
-                    'APELIDO': row.get('APELIDO'),
-                    'SEXO': row.get('SEXO'),
-                    'PESSOA': row.get('PESSOA'),
-                    'IDADE': row.get('IDADE'),
-                    'ATIVIDADE': row.get('ATIVIDADE'),
-                    'ENVOLVIMENTO': row.get('ENVOLVIMENTO'),
-                    'TIPO_SUSPEITA': row.get('TIPO_SUSPEITA'),
+                noticias[nid]['NAMES'].append({
+                    'NOME':               row.get('NOME'),
+                    'CPF':                row.get('CPF'),
+                    'NOME_CPF':           row.get('NOME_CPF'),
+                    'APELIDO':            row.get('APELIDO'),
+                    'SEXO':               row.get('SEXO'),
+                    'PESSOA':             row.get('PESSOA'),
+                    'OPERACAO':           row.get('OPERACAO'),
+                    'IDADE':              row.get('IDADE'),
+                    'ATIVIDADE':          row.get('ATIVIDADE'),
+                    'ENVOLVIMENTO':       row.get('ENVOLVIMENTO'),
                     'FLG_PESSOA_PUBLICA': row.get('FLG_PESSOA_PUBLICA'),
-                    'ANIVERSARIO': row.get('ANIVERSARIO'),
-                    'INDICADOR_PPE': row.get('INDICADOR_PPE')
-                }
-                noticias[news_id]['NAMES'].append(name_data)
-        
-        logger.info(f"DEBUG: Total de notícias agregadas: {len(noticias)}")
-        for news_id, news in noticias.items():
-            logger.info(f"DEBUG: Notícia ID {news_id} possui {len(news.get('NAMES', []))} registro(s) de nomes")
-        
+                    'ANIVERSARIO':        row.get('ANIVERSARIO'),
+                    'INDICADOR_PPE':      row.get('INDICADOR_PPE'),
+                })
         return list(noticias.values())
     except mysql.connector.Error as err:
         logger.error(f"Erro no banco de dados: {err}")
@@ -266,109 +237,129 @@ def fetch_noticias_publicadas():
             conn.close()
 
 def insert_names_to_aux(noticias):
-    published_news = []
+    published_news     = []
     not_published_news = []
-    total_inserted = 0
+    total_inserted     = 0
+
     try:
-        conn = mysql.connector.connect(**DB_CONFIG)
+        conn   = mysql.connector.connect(**DB_CONFIG)
         cursor = conn.cursor()
+
         insert_query = """
             INSERT INTO Auxiliar (
-                NOME, CPF, NOME_CPF, APELIDO, DTEC, 
-                SEXO, PESSOA, IDADE, ATIVIDADE, ENVOLVIMENTO, 
-                TIPO_SUSPEITA, OPERACAO, TITULO, DATA_NOTICIA, FONTE_NOTICIA, 
-                REGIAO, ESTADO, REGISTRO_NOTICIA, FLG_PESSOA_PUBLICA, DATA_GRAVACAO, 
-                EXISTEM_PROCESSOS, ORIGEM_UF, TRIBUNAIS, LINKS_TRIBUNAIS, DATA_PESQUISA, 
-                TIPO_INFORMACAO, ANIVERSARIO, CITACOES_NA_MIDIA, INDICADOR_PPE, PEP_RELACIONADO, 
-                LINK_NOTICIA, DATA_ATUALIZACAO, ORGAO, EMPRESA_RELACIONADA, CNPJ_EMPRESA_RELACIONADA, 
+                NOME, CPF, NOME_CPF, APELIDO, DTEC,
+                SEXO, PESSOA, IDADE, ATIVIDADE, ENVOLVIMENTO,
+                TIPO_SUSPEITA, OPERACAO, TITULO, DATA_NOTICIA, FONTE_NOTICIA,
+                REGIAO, ESTADO, REGISTRO_NOTICIA, FLG_PESSOA_PUBLICA, DATA_GRAVACAO,
+                EXISTEM_PROCESSOS, ORIGEM_UF, TRIBUNAIS, LINKS_TRIBUNAIS, DATA_PESQUISA,
+                TIPO_INFORMACAO, ANIVERSARIO, CITACOES_NA_MIDIA, INDICADOR_PPE, PEP_RELACIONADO,
+                LINK_NOTICIA, DATA_ATUALIZACAO, ORGAO, EMPRESA_RELACIONADA, CNPJ_EMPRESA_RELACIONADA,
                 RELACIONAMENTO, DATA_INICIO_MANDATO, DATA_FIM_MANDATO, DATA_CARENCIA
             ) VALUES (
-                %s, %s, %s, %s, %s, 
-                %s, %s, %s, %s, %s, 
-                %s, %s, %s, %s, %s, 
-                %s, %s, %s, %s, NOW(), 
-                %s, %s, %s, %s, NOW(), 
-                %s, %s, %s, %s, %s, 
-                %s, NOW(), %s, %s, %s, 
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, NOW(),
+                %s, %s, %s, %s, NOW(),
+                %s, %s, %s, %s, %s,
+                %s, NOW(), %s, %s, %s,
                 %s, %s, %s, %s
             )
         """
-        dtec = None
-        existem_processos = None
-        origem_uf = None
-        tribunais = None
-        links_tribunais = None
-        tipo_informacao = None
-        citacoes_na_midia = None
-        pep_relacionado = None
-        orgao = None
-        empresa_relacionada = None
-        cnpj_empresa_relacionada = None
-        relacionamento = None
-        data_inicio_mandato = None
-        data_fim_mandato = None
-        data_carencia = None
+
+        # campos fixos (None) para colunas estáticas
+        dtec                      = None
+        existem_processos         = None
+        origem_uf                 = None
+        tribunais                 = None
+        links_tribunais           = None
+        pep_relacionado           = None
+        orgao                     = None
+        empresa_relacionada       = None
+        cnpj_empresa_relacionada  = None
+        relacionamento            = None
+        data_inicio_mandato       = None
+        data_fim_mandato          = None
+        data_carencia             = None
 
         for news in noticias:
-            news_id         = news.get("ID")
-            titulo          = news.get("TITULO")
-            data_noticia    = news.get("DATA_PUBLICACAO")
-            fonte_noticia   = news.get("FONTE")
-            regiao          = news.get("REGIAO")
-            estado          = news.get("UF")
-            registro_noticia= news.get("REG_NOTICIA")
-            citacoes_na_midia= news.get("TEXTO_NOTICIA")
-            link_noticia    = news.get("URL")
-            operacao         = news.get("OPERACAO")
-            logger.info(f"Iniciando inserção dos nomes para notícia ID {news_id}")
+            # aplicando o mapping conforme a categoria
+            categoria            = news.get("CATEGORIA")
+            tipo_suspeita, tipo_informacao = CATEGORY_MAPPING.get(categoria, (None, None))
+
+            news_id    = news.get("ID")
+            titulo     = news.get("TITULO")
+            data_noticia = news.get("DATA_PUBLICACAO")
+            fonte      = news.get("FONTE")
+            regiao     = news.get("REGIAO")
+            estado     = news.get("UF")
+            reg_noticia = news.get("REG_NOTICIA")
+            texto      = news.get("TEXTO_NOTICIA")
 
             names_inserted = 0
             for name in news.get("NAMES", []):
-                nome             = name.get("NOME")
-                cpf              = name.get("CPF")
-                nome_cpf         = name.get("NOME_CPF")
-                apelido          = name.get("APELIDO")
-                sexo             = name.get("SEXO")
-                pessoa           = name.get("PESSOA")
-                idade            = name.get("IDADE")
-                atividade        = name.get("ATIVIDADE")
-                envolvimento     = name.get("ENVOLVIMENTO")
-                tipo_suspeita    = name.get("TIPO_SUSPEITA")
-                flg_pessoa_publica = name.get("FLG_PESSOA_PUBLICA")
-                aniversario      = name.get("ANIVERSARIO")
-                indicador_ppe    = name.get("INDICADOR_PPE")
-
                 values = (
-                    nome, cpf, nome_cpf, apelido, dtec, 
-                    sexo, pessoa, idade, atividade, envolvimento, 
-                    tipo_suspeita, operacao, titulo, data_noticia, fonte_noticia, 
-                    regiao, estado, registro_noticia, flg_pessoa_publica, existem_processos, 
-                    origem_uf, tribunais, links_tribunais, tipo_informacao, 
-                    aniversario, citacoes_na_midia, indicador_ppe, pep_relacionado, link_noticia,
-                    orgao, empresa_relacionada, cnpj_empresa_relacionada, relacionamento, data_inicio_mandato, 
-                    data_fim_mandato, data_carencia
+                    name['NOME'],
+                    name['CPF'],
+                    name['NOME_CPF'],
+                    name['APELIDO'],
+                    dtec,
+                    name['SEXO'],
+                    name['PESSOA'],
+                    name['IDADE'],
+                    name['ATIVIDADE'],
+                    name['ENVOLVIMENTO'],
+                    tipo_suspeita,
+                    name['OPERACAO'],
+                    titulo,
+                    data_noticia,
+                    fonte,
+                    regiao,
+                    estado,
+                    reg_noticia,
+                    name['FLG_PESSOA_PUBLICA'],
+                    existem_processos,
+                    origem_uf,
+                    tribunais,
+                    links_tribunais,
+                    tipo_informacao,
+                    name['ANIVERSARIO'],
+                    texto,
+                    name['INDICADOR_PPE'],
+                    pep_relacionado,
+                    news.get("URL"),
+                    orgao,
+                    empresa_relacionada,
+                    cnpj_empresa_relacionada,
+                    relacionamento,
+                    data_inicio_mandato,
+                    data_fim_mandato,
+                    data_carencia
                 )
                 try:
                     cursor.execute(insert_query, values)
                     total_inserted += 1
                     names_inserted += 1
-                    logger.info(f"Nome '{nome}' inserido com sucesso para notícia ID {news_id}")
+                    logger.info(f"Nome '{name['NOME']}' inserido para notícia {news_id}")
                 except Exception as err:
-                    logger.error(f"ERRO: Falha ao inserir nome '{nome}' para notícia ID {news_id} - {err}")
+                    logger.error(f"Erro ao inserir '{name['NOME']}' (notícia {news_id}): {err}")
+
             if names_inserted > 0:
                 try:
-                    update_query = "UPDATE TB_NOTICIA_RASPADA SET STATUS = %s, DT_TRANSFERENCIA = NOW() WHERE ID = %s"
-                    cursor.execute(update_query, ("203-PUBLISHED", news_id))
-                    logger.info(f"Notícia ID {news_id} atualizada para 203-PUBLISHED")
+                    cursor.execute(
+                        "UPDATE TB_NOTICIA_RASPADA SET STATUS=%s, DT_TRANSFERENCIA=NOW() WHERE ID=%s",
+                        ("203-PUBLISHED", news_id)
+                    )
                     published_news.append(news_id)
                 except Exception as err:
-                    logger.error(f"Erro ao atualizar notícia ID {news_id} para 203-PUBLISHED - {err}")
+                    logger.error(f"Erro ao atualizar notícia {news_id} para 203-PUBLISHED: {err}")
                     not_published_news.append(news_id)
             else:
-                logger.warning(f"Nenhum nome inserido para notícia ID {news_id}. Status não atualizado.")
                 not_published_news.append(news_id)
+
         conn.commit()
-        logger.info(f"Total de nomes inseridos na tabela Auxiliar: {total_inserted}")
+        logger.info(f"Total de nomes inseridos na Auxiliar: {total_inserted}")
+
     except Exception as err:
         logger.error(f"Erro ao inserir na Auxiliar: {err}")
     finally:
@@ -376,6 +367,7 @@ def insert_names_to_aux(noticias):
             cursor.close()
         if 'conn' in locals() and conn.is_connected():
             conn.close()
+
     return published_news, not_published_news
 
 def main():
@@ -384,41 +376,30 @@ def main():
         logger.info("Nenhum registro encontrado para a data atual.")
         return
     
-    for reg in registros:
-        logger.info(
-            f"Registro: REG_NOTICIA = {reg['REG_NOTICIA']}, "
-            f"categoria = {reg['CATEGORIA']}, "
-            f"cat_abrev = {reg['CAT_ABREV']}, "
-            f"cat_prefix = {reg['CAT_PREFIX']}"
-        )
-    
+    print('len?:::::', len(registros))
+
     grupos = agrupar_registros(registros)
-    
     transfer_success = []
-    transfer_fail = []
+    transfer_fail    = []
+
     for grupo in grupos:
-        logger.info(f"Categoria: {grupo['CATEGORIA']} - Total de registros: {len(grupo['REGISTROS'])}")
-        for reg in grupo["REGISTROS"]:
-            local_pattern, remote_dir = construir_caminhos(reg)
-            logger.info(f"Preparando transferência para o padrão: {local_pattern}")
-            resultado = transferir_arquivo(local_pattern, remote_dir, reg['ID'])
-            if resultado:
+        logger.info(f"Categoria: {grupo['CATEGORIA']} - {len(grupo['REGISTROS'])} registros")
+        for reg in grupo['REGISTROS']:
+            lp, rd = construir_caminhos(reg)
+            logger.info(f"Transferindo {lp} → {rd}")
+            if transferir_arquivo(lp, rd, reg['ID']):
                 transfer_success.append(reg['REG_NOTICIA'])
             else:
                 transfer_fail.append(reg['REG_NOTICIA'])
-    
+
     noticias = fetch_noticias_publicadas()
     published_news, not_published_news = insert_names_to_aux(noticias)
-    
+
     final_report = f"""
-    Relatório Final:
-    --------------------
-    Arquivos Transferidos: {transfer_success} (Total: {len(transfer_success)})
-    Arquivos Não Transferidos: {transfer_fail} (Total: {len(transfer_fail)})
-    Notícias Publicadas (atualizadas para 203-PUBLISHED): {published_news} (Total: {len(published_news)})
-    Notícias Não Publicadas: {not_published_news} (Total: {len(not_published_news)})
-    --------------------
-    """
+Relatório Final:
+  Notícias Publicadas:       {published_news}    (Total: {len(published_news)})
+  Notícias Não Publicadas:   {not_published_news} (Total: {len(not_published_news)})
+"""
     logger.info(final_report)
 
 if __name__ == "__main__":
